@@ -2,4 +2,7 @@ spring:
   application:
     name: payment-service
   config:
-    import: configserver:http://localhost:8888
+    import:
+      - optional:file:./.env[.properties]
+      - optional:file:../.env[.properties]
+      - configserver:http://localhost:8888

@@ -10,7 +10,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
-import java.util.HashMap;
+import java.util.EnumMap;
 import java.util.Map;
 
 @Configuration
@@ -22,7 +22,7 @@ public class PaymentProcessorConfig {
 
     @Bean
     public Map<PaymentMethod, PaymentProcessor> paymentProcessorMap() {
-        Map<PaymentMethod, PaymentProcessor> map = new HashMap<>();
+        Map<PaymentMethod, PaymentProcessor> map = new EnumMap<>(PaymentMethod.class);
 
         map.put(PaymentMethod.UPI, upiPaymentProcessor);
         map.put(PaymentMethod.NET_BANKING, netBankingPaymentProcessor);

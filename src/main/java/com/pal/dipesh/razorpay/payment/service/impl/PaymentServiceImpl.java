@@ -4,7 +4,6 @@ import com.pal.dipesh.razorpay.common.enums.EventAggregateType;
 import com.pal.dipesh.razorpay.common.enums.OrderStatus;
 import com.pal.dipesh.razorpay.common.enums.PaymentEvent;
 import com.pal.dipesh.razorpay.common.enums.PaymentStatus;
-import com.pal.dipesh.razorpay.common.exception.BusinessRuleViolationException;
 import com.pal.dipesh.razorpay.common.exception.ResourceNotFoundException;
 import com.pal.dipesh.razorpay.payment.dto.request.PaymentInitiateRequest;
 import com.pal.dipesh.razorpay.payment.dto.response.PaymentResponse;
@@ -17,6 +16,7 @@ import com.pal.dipesh.razorpay.payment.mapper.PaymentMapper;
 import com.pal.dipesh.razorpay.payment.outbox.OutboxEventPublisher;
 import com.pal.dipesh.razorpay.payment.repository.OrderRepository;
 import com.pal.dipesh.razorpay.payment.repository.PaymentRepository;
+import com.pal.dipesh.razorpay.payment.saga.PaymentAuthorizationRecorder;
 import com.pal.dipesh.razorpay.payment.service.PaymentService;
 import com.pal.dipesh.razorpay.payment.service.PaymentTransitionService;
 
@@ -24,6 +24,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
@@ -36,6 +37,7 @@ import java.util.UUID;
 @Transactional(readOnly = true)
 public class PaymentServiceImpl implements PaymentService {
 
+    private final PaymentAuthorizationRecorder paymentAuthorizationRecorder;
     private final PaymentTransitionService paymentTransitionService;
     private final PaymentGatewayRouter paymentGatewayRouter;
     private final OutboxEventPublisher outboxEventPublisher;
@@ -43,80 +45,44 @@ public class PaymentServiceImpl implements PaymentService {
     private final OrderRepository orderRepository;
     private final PaymentMapper paymentMapper;
 
+    /**
+     * Saga orchestration only - must not hold a transaction. Each step below owns its own
+     * transactional boundary so the recorded payment is durable before the gateway call and the
+     * compensation/result step can still commit if that call fails.
+     */
     @Override
-    @Transactional
-    public PaymentResponse initiate(UUID merchantId, PaymentInitiateRequest request) {
-        OrderRecord order = orderRepository.findByIdAndMerchantIdForUpdate(request.orderId(), merchantId)
-                .orElseThrow(() -> {
-                    log.warn("Order with id {} not found for merchant {}", request.orderId(), merchantId);
-                    return new ResourceNotFoundException("order", request.orderId());
-                });
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    public PaymentResponse initiate(UUID merchantId, PaymentInitiateRequest request, String idempotencyKey) {
+        if(idempotencyKey != null && !idempotencyKey.isEmpty()) {
+            var existingPayment = paymentAuthorizationRecorder.findExistingAttempt(merchantId, idempotencyKey);
 
-        if(order.getOrderStatus() != OrderStatus.CREATED && order.getOrderStatus() != OrderStatus.ATTEMPTED) {
-            log.warn("Order with id {} is not in a valid state for payment initiation. Current state: {}", request.orderId(), order.getOrderStatus());
-            throw new BusinessRuleViolationException("ORDER_NOT_PAYABLE", "Order cannot accept payment in status: " + order.getOrderStatus());
+            if(existingPayment.isPresent()) {
+                log.info("Idempotency replay for paymentId: {}, merchantId: {}, idempotencyKey: {}", existingPayment.get().id(), merchantId, idempotencyKey);
+                return existingPayment.get();
+            }
         }
 
-        order.setOrderStatus(OrderStatus.ATTEMPTED);
-        order.setAttempts(order.getAttempts() + 1);
-
-        Payment payment = Payment.builder()
-                .orderRecord(order)
-                .merchantId(merchantId)
-                .amount(order.getAmount())
-                .status(PaymentStatus.CREATED)
-                .method(request.method())
-                .idempotencyKey(UUID.randomUUID().toString()) // TODO: Handle Idempotency
-                .methodDetails(request.methodDetails())
-                .build();
-
-        payment = paymentRepository.save(payment);
+        Payment payment = paymentAuthorizationRecorder.recordPayment(merchantId, request, idempotencyKey);
 
         PaymentRequest paymentRequest = new PaymentRequest(
                 payment.getId(),
-                order.getId(),
+                request.orderId(),
                 merchantId,
-                order.getAmount(),
+                payment.getAmount(),
                 request.method(),
                 request.methodDetails()
         );
 
-        paymentTransitionService.apply(payment, PaymentEvent.AUTHORIZE_ATTEMPT);
-        PaymentResult paymentResult = paymentGatewayRouter.routePayment(paymentRequest);
+        PaymentResult paymentResult;
 
-        switch (paymentResult) {
-            case PaymentResult.Success success -> {
-                log.warn("Invalid State");
-                return null;
-            }
-
-            case PaymentResult.Pending pending -> payment.setProcessorReference(pending.registrationRef());
-
-            case PaymentResult.Failure failure -> {
-                paymentTransitionService.apply(payment, PaymentEvent.AUTHORIZE_FAIL);
-                payment.setErrorCode(failure.errorCode());
-                payment.setErrorDescription(failure.errorDescription());
-            }
+        try {
+            paymentResult = paymentGatewayRouter.initiate(paymentRequest);
+        } catch (Exception e) {
+            log.warn("Payment gateway initiation failed for paymentId: {}", payment.getId(), e);
+            return paymentAuthorizationRecorder.compensateAuthorizationFailure(payment.getId(), "PAYMENT_GATEWAY_ROUTER_UNREACHABLE", e.getMessage());
         }
 
-        payment = paymentRepository.save(payment);
-        orderRepository.save(order);
-
-        outboxEventPublisher.publish(
-                EventAggregateType.PAYMENT,
-                payment.getId(),
-                "PAYMENT_CREATED",
-                Map.of("orderId", payment.getOrderRecord().getId().toString(),
-                        "paymentId", payment.getId().toString(),
-                        "merchantId", payment.getMerchantId().toString(),
-                        "paymentStatus", payment.getStatus().name(),
-                        "amountUnits", payment.getAmount().getAmountUnits(),
-                        "amountCurrency", payment.getAmount().getCurrency(),
-                        "paymentMethod", payment.getMethod().name()
-                )
-        );
-
-        return paymentMapper.toPaymentResponse(payment);
+        return paymentAuthorizationRecorder.handleGatewayResponse(payment.getId(), paymentResult);
     }
 
     @Override
@@ -195,7 +161,7 @@ public class PaymentServiceImpl implements PaymentService {
                 payment.setCapturedAt(LocalDateTime.now());
                 orderRecord.setOrderStatus(OrderStatus.PAID);
 
-                log.info("Payment with id {} has been captured", paymentId);
+                log.info("Payment with id {} has been auto captured", paymentId);
             } else if(captureResult instanceof PaymentResult.Failure(String code, String description)) {
                 paymentTransitionService.apply(payment, PaymentEvent.CAPTURE_FAIL);
                 payment.setErrorCode(code);

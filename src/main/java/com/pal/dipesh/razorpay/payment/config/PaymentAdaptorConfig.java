@@ -11,7 +11,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
-import java.util.HashMap;
+import java.util.EnumMap;
 import java.util.Map;
 
 @Configuration
@@ -24,7 +24,7 @@ public class PaymentAdaptorConfig {
 
     @Bean
     public Map<PaymentMethod, PaymentAdapter> paymentAdapterMap() {
-        Map<PaymentMethod, PaymentAdapter> map = new HashMap<>();
+        Map<PaymentMethod, PaymentAdapter> map = new EnumMap<>(PaymentMethod.class);
 
         map.put(PaymentMethod.CARD, cardPaymentAdapter);
         map.put(PaymentMethod.UPI, upiPaymentAdapter);

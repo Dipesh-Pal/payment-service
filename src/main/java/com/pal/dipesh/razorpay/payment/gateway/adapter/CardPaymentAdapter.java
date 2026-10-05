@@ -7,6 +7,9 @@ import com.pal.dipesh.razorpay.payment.gateway.dto.PaymentRequest;
 import com.pal.dipesh.razorpay.payment.gateway.dto.PaymentResult;
 import com.pal.dipesh.razorpay.common.pojo.PaymentProcessorResponse;
 
+import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
+import io.github.resilience4j.retry.annotation.Retry;
+
 import lombok.RequiredArgsConstructor;
 
 import org.springframework.stereotype.Component;
@@ -20,15 +23,18 @@ public class CardPaymentAdapter implements PaymentAdapter {
     private final VaultServiceClient vaultServiceClient;
 
     @Override
+    @CircuitBreaker(name = "vault-service")
+    @Retry(name = "vault-service")
     public PaymentResult initiate(PaymentRequest request) {
+        // TODO: Validate the request.methodDetails() to ensure it contains the required fields for card payment
         String token = (String) request.methodDetails().get("token");
 
         PaymentProcessorResponse response = vaultServiceClient.charge(new VaultChargeRequest(request.paymentId(), token, request.amount(), request.methodDetails()));
 
         return switch (response) {
-            case PaymentProcessorResponse.Failure failure -> new PaymentResult.Failure(failure.errorCode(), failure.errorDescription());
-            case PaymentProcessorResponse.Pending pending -> new PaymentResult.Pending(pending.processorReference());
-            case PaymentProcessorResponse.Success success -> new PaymentResult.Success(success.processorReference(), success.bankReference());
+            case PaymentProcessorResponse.Failure(var errorCode, var errorDescription) -> new PaymentResult.Failure(errorCode, errorDescription);
+            case PaymentProcessorResponse.Pending(var processorReference) -> new PaymentResult.Pending(processorReference);
+            case PaymentProcessorResponse.Success(var processorReference, var bankReference) -> new PaymentResult.Success(processorReference, bankReference);
         };
     }
 

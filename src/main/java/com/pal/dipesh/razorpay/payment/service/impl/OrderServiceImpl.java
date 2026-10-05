@@ -19,6 +19,9 @@ import com.pal.dipesh.razorpay.payment.repository.OrderRepository;
 import com.pal.dipesh.razorpay.payment.repository.PaymentRepository;
 import com.pal.dipesh.razorpay.payment.service.OrderService;
 
+import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
+import io.github.resilience4j.retry.annotation.Retry;
+
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
@@ -49,6 +52,8 @@ public class OrderServiceImpl implements OrderService {
 
     @Override
     @Transactional
+    @CircuitBreaker(name = "merchant-service")
+    @Retry(name = "merchant-service")
     public OrderResponse createOrder(UUID merchantId, OrderCreateRequest request) {
         if(request.receipt() != null && orderRepository.existsByMerchantIdAndReceipt(merchantId, request.receipt())) {
             log.warn("Order with receipt {} already exists for merchant {}", request.receipt(), merchantId);
@@ -144,7 +149,7 @@ public class OrderServiceImpl implements OrderService {
 
     @Override
     public List<PaymentResponse> listPayments(UUID merchantId, UUID orderId) {
-        OrderRecord order = orderRepository.findByIdAndMerchantId(orderId, merchantId)
+        orderRepository.findByIdAndMerchantId(orderId, merchantId)
                 .orElseThrow(() -> {
                     log.warn("Order with id {} not found for merchant {}", orderId, merchantId);
                     return new ResourceNotFoundException("order", orderId);

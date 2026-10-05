@@ -1,6 +1,7 @@
 package com.pal.dipesh.razorpay.payment.controller;
 
 import com.pal.dipesh.razorpay.common.annotation.ResponseMessage;
+import com.pal.dipesh.razorpay.common.constants.CustomHeaders;
 import com.pal.dipesh.razorpay.common.context.CustomRequestContext;
 import com.pal.dipesh.razorpay.payment.dto.request.PaymentInitiateRequest;
 import com.pal.dipesh.razorpay.payment.dto.response.PaymentResponse;
@@ -26,10 +27,10 @@ public class PaymentController {
 
     @PostMapping
     @ResponseMessage("Payment initiated")
-    public ResponseEntity<PaymentResponse> initiate(@RequestBody @Valid PaymentInitiateRequest request) {
+    public ResponseEntity<PaymentResponse> initiate(@RequestBody @Valid PaymentInitiateRequest request, @RequestHeader(name = CustomHeaders.IDEMPOTENCY_KEY, required = false) String idempotencyKey) {
         return ResponseEntity
                 .status(HttpStatus.CREATED)
-                .body(paymentService.initiate(customRequestContext.getMerchantId(), request));
+                .body(paymentService.initiate(customRequestContext.getMerchantId(), request, idempotencyKey));
     }
 
     @PostMapping("/{paymentId}/capture")

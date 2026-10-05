@@ -6,7 +6,7 @@ import com.pal.dipesh.razorpay.payment.dto.response.PaymentResponse;
 import java.util.UUID;
 
 public interface PaymentService {
-    PaymentResponse initiate(UUID merchantId, PaymentInitiateRequest request);
+    PaymentResponse initiate(UUID merchantId, PaymentInitiateRequest request, String idempotencyKey);
 
     PaymentResponse capture(UUID merchantId, UUID paymentId);
 

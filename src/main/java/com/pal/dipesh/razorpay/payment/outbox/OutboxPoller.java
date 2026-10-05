@@ -7,6 +7,8 @@ import com.pal.dipesh.razorpay.payment.repository.OutboxEventRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
+
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -25,8 +27,9 @@ public class OutboxPoller {
     private final KafkaProperties kafkaProperties;
 
     @Scheduled(fixedDelay = 5000) // Poll every 5 seconds
+    @SchedulerLock(name = "payment-service-outbox-poller", lockAtMostFor = "1m", lockAtLeastFor = "1s")
     public void poll(){
-        var events = outboxEventRepository.findByStatusOrderByCreatedAtDesc(OutboxStatus.PENDING);
+        var events = outboxEventRepository.findByStatusOrderByCreatedAtAsc(OutboxStatus.PENDING);
 
         for (var event : events) {
             try {
@@ -43,6 +46,10 @@ public class OutboxPoller {
 
                 kafkaTemplate.send(topic, key, envelope).get(5, TimeUnit.SECONDS);
                 outboxResultHandler.handleEventPublished(event);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                log.warn("Outbox polling interrupted, eventId: {}", event.getId(), e);
+                return;
             } catch (Exception e) {
                 log.error("Outbox event polling failed, eventId: {}, attempts: {}", event.getId(), event.getAttempts(), e);
                 outboxResultHandler.handleEventFailed(event, e.getMessage());

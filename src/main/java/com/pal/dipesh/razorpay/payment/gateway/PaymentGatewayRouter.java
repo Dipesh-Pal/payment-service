@@ -17,7 +17,7 @@ public class PaymentGatewayRouter {
 
     private final Map<PaymentMethod, PaymentAdapter> paymentAdapterMap;
 
-    public PaymentResult routePayment(PaymentRequest request) {
+    public PaymentResult initiate(PaymentRequest request) {
         PaymentAdapter paymentAdapter = paymentAdapterMap.get(request.method());
 
         if (paymentAdapter == null) {

@@ -36,9 +36,9 @@ public class UpiPaymentAdapter implements PaymentAdapter {
             PaymentProcessorResponse paymentProcessorResponse = paymentProcessorRouter.charge(processorRequest);
 
             return switch (paymentProcessorResponse) {
-                case PaymentProcessorResponse.Success success -> new PaymentResult.Success(success.processorReference(), success.bankReference());
-                case PaymentProcessorResponse.Pending pending -> new PaymentResult.Pending(pending.processorReference());
-                case PaymentProcessorResponse.Failure failure -> new PaymentResult.Failure(failure.errorCode(), failure.errorDescription());
+                case PaymentProcessorResponse.Success(String processorReference, String bankReference) -> new PaymentResult.Success(processorReference, bankReference);
+                case PaymentProcessorResponse.Pending(String processorReference) -> new PaymentResult.Pending(processorReference);
+                case PaymentProcessorResponse.Failure(String errorCode, String errorDescription) -> new PaymentResult.Failure(errorCode, errorDescription);
             };
         } catch (Exception e) {
             log.warn("Failed to payment with UpiPaymentAdapter, paymentId: {}", request.paymentId(), e);
